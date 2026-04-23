@@ -880,9 +880,18 @@ class LangGraphTerminalBenchAgent(BaseAgent):
                 )
             )
 
+        verifier_blocked_markers = [
+            "verification_result=fail filter_rc",
+            "verification_result=fail error=",
+            "can't open file",
+            "no such file or directory",
+            "filter_rc=1",
+        ]
+        verifier_blocked = "verification_result=fail" in combined and any(
+            marker in combined for marker in verifier_blocked_markers
+        )
         marker_rules: list[tuple[str, EvidenceItem["type"], str, EvidenceItem["scope"]]] = [
             ("verification_result=pass", "verification", "verification_passed", "solution"),
-            ("verification_result=fail", "verification", "verification_failed", "solution"),
             ("verification_result=blocked", "failure", "verification_blocked", "verifier"),
             ("alert_present=1", "verification", "alert_triggered", "solution"),
             ("alert_present=true", "verification", "alert_triggered", "solution"),
@@ -895,6 +904,10 @@ class LangGraphTerminalBenchAgent(BaseAgent):
         for marker, evidence_type, claim, scope in marker_rules:
             if marker in combined:
                 add(evidence_type, claim, scope)
+        if verifier_blocked:
+            add("failure", "verification_blocked", "verifier")
+        elif "verification_result=fail" in combined:
+            add("verification", "verification_failed", "solution")
         if "alert " in combined or "alert_successfully_triggered" in combined or "alert successfully triggered" in combined:
             add("verification", "alert_triggered", "solution")
         if return_code != 0:
@@ -1237,6 +1250,14 @@ class LangGraphTerminalBenchAgent(BaseAgent):
             is_source_view = tool_name in {"read_file", "read_many_files"} or (
                 tool_name == "exec_shell" and any(marker in command for marker in ["cat ", "nl -ba ", "sed -n", "head "]) and ".py" in command
             )
+            noisy_success_diagnostics = return_code == 0 and any(
+                marker in combined
+                for marker in [
+                    "error:dbus/",
+                    "failed to connect to the bus",
+                    "org.freedesktop.dbus",
+                ]
+            )
 
             if tool_name == "compare_output" and '"match":false' in combined:
                 failure_signals.append("Output comparison failed.")
@@ -1246,7 +1267,7 @@ class LangGraphTerminalBenchAgent(BaseAgent):
                 failure_signals.append(
                     f"Tool `{tool_name}` failed with return code {return_code}."
                 )
-            elif tool_name in execution_like_tools and not is_source_view and any(
+            elif tool_name in execution_like_tools and not is_source_view and not noisy_success_diagnostics and any(
                 marker in combined
                 for marker in [
                     "wrong output",

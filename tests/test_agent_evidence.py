@@ -38,6 +38,24 @@ class AgentEvidenceTests(unittest.TestCase):
         self.assertEqual(fail_state[0], "negatively_verified")
         self.assertIn("alert_not_triggered", {item["claim"] for item in fail_evidence})
 
+    def test_verifier_protocol_blocks_when_helper_itself_fails(self) -> None:
+        agent = self.make_agent()
+        evidence = agent._extract_evidence_from_payload(
+            {
+                "_tool_name": "exec_shell",
+                "return_code": 0,
+                "stdout": "VERIFICATION_RESULT=FAIL filter_rc=1 stderr= python: can't open file '/tests/filter.py': [Errno 2] No such file or directory\n",
+                "stderr": "",
+            }
+        )
+        state = agent._derive_state_from_evidence(evidence, [], [], [], [])
+
+        self.assertEqual(state[0], "verification_blocked")
+        self.assertTrue(state[2])
+        self.assertIn("filter_rc=1", state[2][0])
+        self.assertIn("verification_blocked", {item["claim"] for item in evidence})
+        self.assertNotIn("verification_failed", {item["claim"] for item in evidence})
+
     def test_missing_commands_only_block_verification_when_verifier_related(self) -> None:
         agent = self.make_agent()
 
@@ -227,6 +245,18 @@ if attr.startswith("on"):
         self.assertIn("Switch to a different solution family", prompt)
         self.assertIn("Do not propose a solution family", prompt)
         self.assertIn("on*_attributes", prompt)
+
+    def test_chromium_dbus_noise_does_not_trigger_failure_guidance(self) -> None:
+        from langchain_core.messages import ToolMessage
+
+        agent = self.make_agent()
+        message = ToolMessage(
+            name="exec_shell",
+            tool_call_id="call-1",
+            content='{"command":"/usr/bin/chromium --headless --dump-dom file:///app/out.html","return_code":0,"stdout":"[1:2:ERROR:dbus/bus.cc:408] Failed to connect to the bus\\n<!doctype html>","stderr":""}',
+        )
+
+        self.assertIsNone(agent._tool_failure_guidance([message]))
 
 
 if __name__ == "__main__":
