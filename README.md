@@ -250,6 +250,13 @@ uv run python -m ipykernel install --user --name agent --display-name "Python (a
 
 之后在 Notebook 里选择 `Python (agent)` 即可。
 
+## 本地验证
+
+```bash
+uv run python -m py_compile $(find src tests -name '*.py' -print) main.py
+uv run python -m unittest discover -s tests -v
+```
+
 ## 常用命令
 
 ```bash
