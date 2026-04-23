@@ -1540,6 +1540,52 @@ class LangGraphTerminalBenchAgent(BaseAgent):
             )
         return None
 
+    def _redundant_verifier_probe_reason(self, state: AgentState, tool_name: str, args: dict[str, Any]) -> str | None:
+        if tool_name != "check_command_available":
+            return None
+        command_name = str(args.get("command_name", "") or "").strip().lower()
+        if not command_name:
+            return None
+
+        verifier_probe_names = {
+            "pytest",
+            "chromedriver",
+            "geckodriver",
+            "chromium",
+            "google-chrome",
+            "chrome",
+            "firefox",
+        }
+        if command_name not in verifier_probe_names:
+            return None
+
+        helper_roles = state.get("helper_roles", {})
+        verifier_helpers = [path for path, role in helper_roles.items() if role == "verifier"]
+        if verifier_helpers:
+            helper = verifier_helpers[0]
+            return (
+                "Refusing a redundant verifier probe. "
+                f"A verifier helper already exists: `{helper}`. Reuse it before probing more verifier commands."
+            )
+
+        blocked_verifiers = set(state.get("blocked_verifiers", []))
+        if f"{command_name}_missing" in blocked_verifiers:
+            return (
+                "Refusing a redundant verifier probe. "
+                f"`{command_name}` was already confirmed missing in this run."
+            )
+
+        evidence_log = state.get("evidence_log", [])
+        claims = {str(item.get("claim", "")) for item in evidence_log if isinstance(item, dict)}
+        browser_present_claims = {"chromium_present", "google-chrome_present", "chrome_present", "firefox_present"}
+        present_browsers = sorted(claim for claim in claims if claim in browser_present_claims)
+        if command_name in {"chromium", "google-chrome", "chrome", "firefox"} and present_browsers:
+            return (
+                "Refusing a redundant browser verifier probe. "
+                f"Browser verification capability is already present via: {', '.join(present_browsers)}."
+            )
+        return None
+
     def _invalid_verifier_command_reason(self, state: AgentState, tool_name: str, args: dict[str, Any]) -> str | None:
         if tool_name not in {"exec_shell", "run_tests"}:
             return None
@@ -2068,6 +2114,23 @@ class LangGraphTerminalBenchAgent(BaseAgent):
                 name = call["name"]
                 args = call.get("args", {})
                 self._emit(f"graph.tool_dispatch name={name}")
+                redundant_verifier_probe_reason = self._redundant_verifier_probe_reason(state, name, args)
+                if redundant_verifier_probe_reason:
+                    error_text = format_exec_result(
+                        command=f"{name}({json.dumps(args, ensure_ascii=False)})",
+                        return_code=1,
+                        stdout="",
+                        stderr=redundant_verifier_probe_reason,
+                    )
+                    self._emit_block("graph.tool_error", error_text)
+                    tool_messages.append(
+                        ToolMessage(
+                            content=error_text,
+                            tool_call_id=call["id"],
+                            name=name,
+                        )
+                    )
+                    continue
                 invalid_verifier_reason = self._invalid_verifier_command_reason(state, name, args)
                 if invalid_verifier_reason:
                     error_text = format_exec_result(

@@ -328,6 +328,60 @@ if attr.startswith("on"):
 
         self.assertIsNone(reason)
 
+    def test_redundant_verifier_probe_guard_prefers_existing_helper(self) -> None:
+        agent = self.make_agent()
+        reason = agent._redundant_verifier_probe_reason(
+            {
+                "helper_roles": {"/app/.agent-tools/verify_alert.py": "verifier"},
+                "blocked_verifiers": [],
+                "evidence_log": [],
+            },
+            "check_command_available",
+            {"command_name": "pytest"},
+        )
+
+        self.assertIsNotNone(reason)
+        self.assertIn("verify_alert.py", reason or "")
+
+    def test_redundant_browser_probe_guard_uses_existing_browser_capability(self) -> None:
+        agent = self.make_agent()
+        reason = agent._redundant_verifier_probe_reason(
+            {
+                "helper_roles": {},
+                "blocked_verifiers": [],
+                "evidence_log": [
+                    {
+                        "type": "environment",
+                        "claim": "chromium_present",
+                        "scope": "environment",
+                        "confidence": "high",
+                        "source": "check_command_available",
+                        "detail": '{"command":"chromium","available":true}',
+                    }
+                ],
+            },
+            "check_command_available",
+            {"command_name": "google-chrome"},
+        )
+
+        self.assertIsNotNone(reason)
+        self.assertIn("chromium_present", reason or "")
+
+    def test_redundant_missing_verifier_probe_is_blocked(self) -> None:
+        agent = self.make_agent()
+        reason = agent._redundant_verifier_probe_reason(
+            {
+                "helper_roles": {},
+                "blocked_verifiers": ["pytest_missing"],
+                "evidence_log": [],
+            },
+            "check_command_available",
+            {"command_name": "pytest"},
+        )
+
+        self.assertIsNotNone(reason)
+        self.assertIn("already confirmed missing", reason or "")
+
     def test_chromium_dbus_noise_does_not_trigger_failure_guidance(self) -> None:
         from langchain_core.messages import ToolMessage
 
