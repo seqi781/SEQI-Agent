@@ -50,6 +50,29 @@ class LangGraphTerminalBenchAgent(BaseAgent):
             "next_action": "Avoid frame/iframe/object/embed candidates.",
         },
     }
+    VERIFIER_BLOCKER_RULES: dict[str, dict[str, str]] = {
+        "pytest_missing": {
+            "next_action": "Use an available verifier helper or create a small verifier helper instead of relying on pytest.",
+        },
+        "chromedriver_missing": {
+            "next_action": "Create or choose a verifier path that does not require chromedriver, or bootstrap a browser verifier dependency.",
+        },
+        "chromium_missing": {
+            "next_action": "Create or choose a verifier path that does not require Chromium, or bootstrap a browser verifier dependency.",
+        },
+        "google-chrome_missing": {
+            "next_action": "Create or choose a verifier path that does not require Chrome, or bootstrap a browser verifier dependency.",
+        },
+        "chrome_missing": {
+            "next_action": "Create or choose a verifier path that does not require Chrome, or bootstrap a browser verifier dependency.",
+        },
+        "firefox_missing": {
+            "next_action": "Create or choose a verifier path that does not require Firefox, or bootstrap a browser verifier dependency.",
+        },
+        "geckodriver_missing": {
+            "next_action": "Create or choose a verifier path that does not require geckodriver, or bootstrap a browser verifier dependency.",
+        },
+    }
 
     def __init__(
         self,
@@ -964,20 +987,10 @@ class LangGraphTerminalBenchAgent(BaseAgent):
         verification_state = "unverified"
         verification_summary = "No verification evidence yet."
 
-        verifier_missing_claims = {
-            "pytest_missing",
-            "chromedriver_missing",
-            "chromium_missing",
-            "google-chrome_missing",
-            "chrome_missing",
-            "firefox_missing",
-            "geckodriver_missing",
-        }
-
         for item in evidence_log:
             claim = item.get("claim", "")
             detail = item.get("detail", "")
-            if claim in verifier_missing_claims:
+            if claim in self.VERIFIER_BLOCKER_RULES:
                 blocked = self._merge_unique_strings(blocked, [claim])
             if claim == "alert_not_triggered":
                 failures = self._merge_unique_strings(failures, [detail or claim])
@@ -1045,8 +1058,14 @@ class LangGraphTerminalBenchAgent(BaseAgent):
             if verifier_helpers:
                 add(f"After each new candidate, verify with `{verifier_helpers[0]}`.")
         if verification_state == "verification_blocked":
-            if "pytest_missing" in blocked_verifiers:
-                add("Use an available verifier helper or create a small verifier helper instead of relying on pytest.")
+            blocker_actions = [
+                self.VERIFIER_BLOCKER_RULES[blocker]["next_action"]
+                for blocker in blocked_verifiers
+                if blocker in self.VERIFIER_BLOCKER_RULES
+            ]
+            if blocker_actions:
+                for action in blocker_actions:
+                    add(action)
             else:
                 add("Resolve verifier blockage or create a local verifier helper that emits VERIFICATION_RESULT markers.")
         for pattern in rejected_solution_patterns:

@@ -65,6 +65,33 @@ class AgentEvidenceTests(unittest.TestCase):
         self.assertEqual(pytest_state[0], "verification_blocked")
         self.assertEqual(pytest_state[2], ["pytest_missing"])
 
+    def test_verifier_blocker_rules_drive_state_and_actions(self) -> None:
+        agent = self.make_agent()
+        for blocker, rule in agent.VERIFIER_BLOCKER_RULES.items():
+            evidence = [
+                {
+                    "type": "environment",
+                    "claim": blocker,
+                    "scope": "verifier",
+                    "confidence": "high",
+                    "source": "test",
+                    "detail": "detail",
+                }
+            ]
+            state = agent._derive_state_from_evidence(evidence, [], [], [], [])
+            self.assertEqual(state[0], "verification_blocked")
+            self.assertIn(blocker, state[2])
+
+            actions = agent._derive_next_actions_from_state(
+                verification_state=state[0],
+                blocked_verifiers=state[2],
+                verified_failures=[],
+                rejected_solution_patterns=[],
+                helper_roles={},
+                existing=[],
+            )
+            self.assertIn(rule["next_action"], actions)
+
     def test_next_actions_use_verifier_helpers_and_rejected_patterns(self) -> None:
         agent = self.make_agent()
         actions = agent._derive_next_actions_from_state(
