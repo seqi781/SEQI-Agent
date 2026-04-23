@@ -3,6 +3,10 @@ import unittest
 from pathlib import Path
 
 from src.terminal_agent.agent import LangGraphTerminalBenchAgent
+from tests.trace_replay_fixtures import (
+    TRACE_REPLAY_PAYLOAD_FIXTURES,
+    TRACE_REPLAY_STATE_FIXTURES,
+)
 
 
 class AgentEvidenceTests(unittest.TestCase):
@@ -10,6 +14,14 @@ class AgentEvidenceTests(unittest.TestCase):
         temp_dir = tempfile.TemporaryDirectory()
         self.addCleanup(temp_dir.cleanup)
         return LangGraphTerminalBenchAgent(logs_dir=Path(temp_dir.name))
+
+    def replay_state_from_payload_fixture(self, fixture_name: str):
+        agent = self.make_agent()
+        evidence = []
+        for payload in TRACE_REPLAY_PAYLOAD_FIXTURES[fixture_name]:
+            evidence.extend(agent._extract_evidence_from_payload(payload))
+        state = agent._derive_state_from_evidence(evidence, [], [], [], [])
+        return agent, evidence, state
 
     def test_verifier_protocol_drives_positive_and_negative_state(self) -> None:
         agent = self.make_agent()
@@ -383,37 +395,9 @@ if attr.startswith("on"):
         self.assertIn("already confirmed missing", reason or "")
 
     def test_trace_replay_derives_negative_verification_without_false_success_or_browser_block(self) -> None:
-        agent = self.make_agent()
-        evidence = []
-        for payload in [
-            {
-                "_tool_name": "check_command_available",
-                "return_code": 0,
-                "stdout": '{"command":"pytest","available":false}',
-                "stderr": "",
-            },
-            {
-                "_tool_name": "check_command_available",
-                "return_code": 0,
-                "stdout": '{"command":"google-chrome","available":false}',
-                "stderr": "",
-            },
-            {
-                "_tool_name": "check_command_available",
-                "return_code": 0,
-                "stdout": '{"command":"chromium","available":true,"path":"/usr/bin/chromium"}',
-                "stderr": "",
-            },
-            {
-                "_tool_name": "exec_shell",
-                "return_code": 0,
-                "stdout": "NO_ALERT TimeoutException\n",
-                "stderr": "",
-            },
-        ]:
-            evidence.extend(agent._extract_evidence_from_payload(payload))
-
-        state = agent._derive_state_from_evidence(evidence, [], [], [], [])
+        _, _, state = self.replay_state_from_payload_fixture(
+            "negative_verification_without_false_success_or_browser_block"
+        )
 
         self.assertEqual(state[0], "negatively_verified")
         self.assertEqual(state[1], "NO_ALERT TimeoutException")
@@ -423,21 +407,7 @@ if attr.startswith("on"):
 
     def test_trace_replay_followup_guards_block_repeat_edits_and_redundant_probes(self) -> None:
         agent = self.make_agent()
-        state = {
-            "helper_roles": {"/app/.agent-tools/verify_alert.py": "verifier"},
-            "blocked_verifiers": ["pytest_missing"],
-            "rejected_solution_patterns": ["on*_attributes", "script_tags", "banned_tags"],
-            "evidence_log": [
-                {
-                    "type": "environment",
-                    "claim": "chromium_present",
-                    "scope": "environment",
-                    "confidence": "high",
-                    "source": "check_command_available",
-                    "detail": '{"command":"chromium","available":true,"path":"/usr/bin/chromium"}',
-                }
-            ],
-        }
+        state = TRACE_REPLAY_STATE_FIXTURES["followup_guard_state"]
 
         edit_reason = agent._rejected_pattern_edit_reason(
             state,
