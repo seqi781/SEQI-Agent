@@ -14,3 +14,7 @@ wheels/
 
 # Jupyter
 .ipynb_checkpoints/
+
+# Generated outputs
+jobs/
+tmp-*/
