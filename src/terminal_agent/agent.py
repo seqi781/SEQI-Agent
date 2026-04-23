@@ -908,7 +908,14 @@ class LangGraphTerminalBenchAgent(BaseAgent):
             add("failure", "verification_blocked", "verifier")
         elif "verification_result=fail" in combined:
             add("verification", "verification_failed", "solution")
-        if "alert " in combined or "alert_successfully_triggered" in combined or "alert successfully triggered" in combined:
+        positive_alert_markers = [
+            "alert_successfully_triggered",
+            "alert successfully triggered",
+            "\nalert ",
+            "stdout\": \"alert ",
+            "stdout':'alert ",
+        ]
+        if "no_alert" not in combined and any(marker in combined for marker in positive_alert_markers):
             add("verification", "alert_triggered", "solution")
         if return_code != 0:
             add("failure", f"{tool_name}_failed", "strategy", "medium", stderr or stdout or command)
@@ -999,12 +1006,16 @@ class LangGraphTerminalBenchAgent(BaseAgent):
         rejected = list(existing_rejected)
         verification_state = "unverified"
         verification_summary = "No verification evidence yet."
+        present_capabilities: set[str] = set()
+        raw_blockers: list[str] = []
 
         for item in evidence_log:
             claim = item.get("claim", "")
             detail = item.get("detail", "")
             if claim in self.VERIFIER_BLOCKER_RULES:
-                blocked = self._merge_unique_strings(blocked, [claim])
+                raw_blockers = self._merge_unique_strings(raw_blockers, [claim])
+            if claim in {"chromium_present", "google-chrome_present", "chrome_present", "firefox_present"}:
+                present_capabilities.add(claim)
             if claim == "alert_not_triggered":
                 failures = self._merge_unique_strings(failures, [detail or claim])
                 verification_state = "negatively_verified"
@@ -1037,6 +1048,20 @@ class LangGraphTerminalBenchAgent(BaseAgent):
                 if claim == rule["evidence_claim"]
             ]
             rejected = self._merge_unique_strings(rejected, rejected_claims)
+
+        browser_available = bool(
+            {"chromium_present", "google-chrome_present", "chrome_present", "firefox_present"}
+            & present_capabilities
+        )
+        for blocker in raw_blockers:
+            if browser_available and blocker in {
+                "google-chrome_missing",
+                "chrome_missing",
+                "chromium_missing",
+                "firefox_missing",
+            }:
+                continue
+            blocked = self._merge_unique_strings(blocked, [blocker])
 
         if verification_state == "unverified" and blocked:
             verification_state = "verification_blocked"

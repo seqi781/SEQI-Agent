@@ -37,6 +37,26 @@ class AgentEvidenceTests(unittest.TestCase):
         fail_state = agent._derive_state_from_evidence(fail_evidence, [], [], [], [])
         self.assertEqual(fail_state[0], "negatively_verified")
         self.assertIn("alert_not_triggered", {item["claim"] for item in fail_evidence})
+        self.assertNotIn("alert_triggered", {item["claim"] for item in fail_evidence})
+        self.assertEqual(fail_state[4], [])
+
+    def test_no_alert_output_does_not_count_as_alert_triggered(self) -> None:
+        agent = self.make_agent()
+        evidence = agent._extract_evidence_from_payload(
+            {
+                "_tool_name": "exec_shell",
+                "return_code": 0,
+                "stdout": "NO_ALERT TimeoutException\n",
+                "stderr": "",
+            }
+        )
+        state = agent._derive_state_from_evidence(evidence, [], [], [], [])
+
+        self.assertEqual(state[0], "negatively_verified")
+        self.assertEqual(state[3], ["NO_ALERT TimeoutException"])
+        self.assertEqual(state[4], [])
+        self.assertIn("alert_not_triggered", {item["claim"] for item in evidence})
+        self.assertNotIn("alert_triggered", {item["claim"] for item in evidence})
 
     def test_verifier_protocol_blocks_when_helper_itself_fails(self) -> None:
         agent = self.make_agent()
@@ -82,6 +102,35 @@ class AgentEvidenceTests(unittest.TestCase):
         pytest_state = agent._derive_state_from_evidence(pytest_evidence, [], [], [], [])
         self.assertEqual(pytest_state[0], "verification_blocked")
         self.assertEqual(pytest_state[2], ["pytest_missing"])
+
+    def test_browser_missing_blockers_are_suppressed_when_substitute_browser_exists(self) -> None:
+        agent = self.make_agent()
+        evidence = []
+        evidence.extend(
+            agent._extract_evidence_from_payload(
+                {
+                    "_tool_name": "check_command_available",
+                    "return_code": 0,
+                    "stdout": '{"command":"google-chrome","available":false}',
+                    "stderr": "",
+                }
+            )
+        )
+        evidence.extend(
+            agent._extract_evidence_from_payload(
+                {
+                    "_tool_name": "check_command_available",
+                    "return_code": 0,
+                    "stdout": '{"command":"chromium","available":true,"path":"/usr/bin/chromium"}',
+                    "stderr": "",
+                }
+            )
+        )
+
+        state = agent._derive_state_from_evidence(evidence, [], [], [], [])
+
+        self.assertEqual(state[0], "unverified")
+        self.assertEqual(state[2], [])
 
     def test_verifier_blocker_rules_drive_state_and_actions(self) -> None:
         agent = self.make_agent()
