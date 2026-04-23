@@ -151,6 +151,36 @@ if attr.startswith("on"):
         self.assertIn("filter_strips_banned_tags", {item["claim"] for item in evidence})
         self.assertEqual(set(state[5]), {"on*_attributes", "script_tags", "banned_tags"})
 
+    def test_rejected_pattern_rules_drive_state_guidance_and_actions(self) -> None:
+        agent = self.make_agent()
+        for pattern, rule in agent.REJECTED_PATTERN_RULES.items():
+            evidence = [
+                {
+                    "type": "inspection",
+                    "claim": rule["evidence_claim"],
+                    "scope": "strategy",
+                    "confidence": "high",
+                    "source": "test",
+                    "detail": "detail",
+                }
+            ]
+            state = agent._derive_state_from_evidence(evidence, [], [], [], [])
+            self.assertIn(pattern, state[5])
+
+            guidance = agent._pattern_avoidance_guidance({"rejected_solution_patterns": [pattern]})
+            self.assertIsNotNone(guidance)
+            self.assertIn(rule["guidance"], guidance or "")
+
+            actions = agent._derive_next_actions_from_state(
+                verification_state="unverified",
+                blocked_verifiers=[],
+                verified_failures=[],
+                rejected_solution_patterns=[pattern],
+                helper_roles={},
+                existing=[],
+            )
+            self.assertIn(rule["next_action"], actions)
+
     def test_replanner_prompt_surfaces_evidence_derived_actions(self) -> None:
         agent = self.make_agent()
         prompt = agent._replan_prompt(

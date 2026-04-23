@@ -33,6 +33,23 @@ from src.terminal_agent.types import AgentState, EvidenceItem
 
 class LangGraphTerminalBenchAgent(BaseAgent):
     SUPPORTS_ATIF = False
+    REJECTED_PATTERN_RULES: dict[str, dict[str, str]] = {
+        "on*_attributes": {
+            "evidence_claim": "filter_strips_on_attributes",
+            "guidance": "Do not use any `on*` event-handler attributes; this family is already disproven.",
+            "next_action": "Avoid all `on*` attributes in future candidates.",
+        },
+        "script_tags": {
+            "evidence_claim": "filter_strips_script_tags",
+            "guidance": "Do not use `<script>` tags; this family is already disproven.",
+            "next_action": "Avoid `<script>` tags in future candidates.",
+        },
+        "banned_tags": {
+            "evidence_claim": "filter_strips_banned_tags",
+            "guidance": "Do not use frame/iframe/object/embed candidates; this family is already disproven.",
+            "next_action": "Avoid frame/iframe/object/embed candidates.",
+        },
+    }
 
     def __init__(
         self,
@@ -348,16 +365,14 @@ class LangGraphTerminalBenchAgent(BaseAgent):
         rejected = state.get("rejected_solution_patterns", [])
         if not rejected:
             return None
-        rules: list[str] = []
-        if "on*_attributes" in rejected:
-            rules.append("Do not use any `on*` event-handler attributes; this family is already disproven.")
-        if "script_tags" in rejected:
-            rules.append("Do not use `<script>` tags; this family is already disproven.")
-        if "banned_tags" in rejected:
-            rules.append("Do not use frame/iframe/object/embed candidates; this family is already disproven.")
-        if not rules:
+        guidance = [
+            self.REJECTED_PATTERN_RULES[pattern]["guidance"]
+            for pattern in rejected
+            if pattern in self.REJECTED_PATTERN_RULES
+        ]
+        if not guidance:
             return None
-        return "Rejected solution families from this run:\n- " + "\n- ".join(rules)
+        return "Rejected solution families from this run:\n- " + "\n- ".join(guidance)
 
     def _next_action_guidance(self, state: AgentState) -> str | None:
         next_actions = [action for action in state.get("next_actions", []) if action.strip()]
@@ -990,12 +1005,12 @@ class LangGraphTerminalBenchAgent(BaseAgent):
                 if verification_state == "unverified":
                     verification_state = "verification_blocked"
                     verification_summary = detail or "A verifier command was rejected as invalid."
-            if claim == "filter_strips_on_attributes":
-                rejected = self._merge_unique_strings(rejected, ["on*_attributes"])
-            if claim == "filter_strips_script_tags":
-                rejected = self._merge_unique_strings(rejected, ["script_tags"])
-            if claim == "filter_strips_banned_tags":
-                rejected = self._merge_unique_strings(rejected, ["banned_tags"])
+            rejected_claims = [
+                pattern
+                for pattern, rule in self.REJECTED_PATTERN_RULES.items()
+                if claim == rule["evidence_claim"]
+            ]
+            rejected = self._merge_unique_strings(rejected, rejected_claims)
 
         if verification_state == "unverified" and blocked:
             verification_state = "verification_blocked"
@@ -1034,12 +1049,10 @@ class LangGraphTerminalBenchAgent(BaseAgent):
                 add("Use an available verifier helper or create a small verifier helper instead of relying on pytest.")
             else:
                 add("Resolve verifier blockage or create a local verifier helper that emits VERIFICATION_RESULT markers.")
-        if "on*_attributes" in rejected_solution_patterns:
-            add("Avoid all `on*` attributes in future candidates.")
-        if "script_tags" in rejected_solution_patterns:
-            add("Avoid `<script>` tags in future candidates.")
-        if "banned_tags" in rejected_solution_patterns:
-            add("Avoid frame/iframe/object/embed candidates.")
+        for pattern in rejected_solution_patterns:
+            rule = self.REJECTED_PATTERN_RULES.get(pattern)
+            if rule:
+                add(rule["next_action"])
         if verifier_helpers and verification_state in {"unverified", "weakly_checked"}:
             add(f"Use existing verifier helper `{verifier_helpers[0]}` for the next verification step.")
         return actions
