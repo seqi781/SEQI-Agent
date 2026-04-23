@@ -1,3 +1,9 @@
+"""Trace replay fixtures for regression coverage.
+
+Add new real-world traces here instead of duplicating test logic in
+`tests/test_agent_evidence.py`.
+"""
+
 TRACE_REPLAY_PAYLOAD_FIXTURES = {
     "negative_verification_without_false_success_or_browser_block": [
         {

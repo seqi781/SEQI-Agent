@@ -113,6 +113,26 @@ uv run python main.py --print-import-path
 
 例如一个自建浏览器 verifier 输出 `VERIFICATION_RESULT=FAIL` 和 `ALERT_PRESENT=0` 后，state 会进入 `negatively_verified`，后续规划会优先要求换方案家族并复用该 verifier helper。
 
+真实 trace 的回归样例集中放在：
+
+```text
+tests/trace_replay_fixtures.py
+```
+
+新增 trace 回归时，优先补 fixture，而不是复制一整段测试逻辑：
+
+- 往 `TRACE_REPLAY_PAYLOAD_FIXTURES` 里加一组工具输出序列
+- 往 `TRACE_REPLAY_PAYLOAD_EXPECTATIONS` 里加对应状态期望
+- 或者往 `TRACE_REPLAY_STATE_FIXTURES` / `TRACE_REPLAY_GUARD_EXPECTATIONS` 里加 follow-up guard 场景
+
+`tests/test_agent_evidence.py` 已经会批量回放这些 fixture 并校验：
+
+- 最终 `verification_state`
+- `blocked_verifiers`
+- `verified_failures` / `verified_successes`
+- 重复 payload family guard
+- 冗余 verifier probe guard
+
 ## 代码结构
 
 当前实现已经按职责拆分到包内：

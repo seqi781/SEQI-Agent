@@ -25,6 +25,36 @@ class AgentEvidenceTests(unittest.TestCase):
         state = agent._derive_state_from_evidence(evidence, [], [], [], [])
         return agent, evidence, state
 
+    def test_trace_replay_fixture_maps_stay_in_sync(self) -> None:
+        self.assertEqual(
+            set(TRACE_REPLAY_PAYLOAD_FIXTURES),
+            set(TRACE_REPLAY_PAYLOAD_EXPECTATIONS),
+        )
+        self.assertEqual(
+            set(TRACE_REPLAY_STATE_FIXTURES),
+            set(TRACE_REPLAY_GUARD_EXPECTATIONS),
+        )
+
+    def test_trace_replay_payload_expectations_have_required_keys(self) -> None:
+        required_keys = {
+            "verification_state",
+            "verification_summary",
+            "blocked_verifiers",
+            "verified_failures",
+            "verified_successes",
+        }
+        for fixture_name, expected in TRACE_REPLAY_PAYLOAD_EXPECTATIONS.items():
+            with self.subTest(fixture=fixture_name):
+                self.assertEqual(required_keys, set(expected))
+
+    def test_trace_replay_guard_expectations_have_required_keys(self) -> None:
+        required_keys = {"edit_tool", "edit_args", "edit_contains", "probe_tool", "probe_cases"}
+        for fixture_name, expected in TRACE_REPLAY_GUARD_EXPECTATIONS.items():
+            with self.subTest(fixture=fixture_name):
+                self.assertEqual(required_keys, set(expected))
+                self.assertTrue(expected["edit_contains"])
+                self.assertTrue(expected["probe_cases"])
+
     def test_verifier_protocol_drives_positive_and_negative_state(self) -> None:
         agent = self.make_agent()
 
