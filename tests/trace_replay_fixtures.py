@@ -27,6 +27,15 @@ TRACE_REPLAY_PAYLOAD_FIXTURES = {
     ],
 }
 
+TRACE_REPLAY_PAYLOAD_EXPECTATIONS = {
+    "negative_verification_without_false_success_or_browser_block": {
+        "verification_state": "negatively_verified",
+        "verification_summary": "NO_ALERT TimeoutException",
+        "blocked_verifiers": ["pytest_missing"],
+        "verified_failures": ["NO_ALERT TimeoutException"],
+        "verified_successes": [],
+    }
+}
 
 TRACE_REPLAY_STATE_FIXTURES = {
     "followup_guard_state": {
@@ -42,6 +51,22 @@ TRACE_REPLAY_STATE_FIXTURES = {
                 "source": "check_command_available",
                 "detail": '{"command":"chromium","available":true,"path":"/usr/bin/chromium"}',
             }
+        ],
+    }
+}
+
+TRACE_REPLAY_GUARD_EXPECTATIONS = {
+    "followup_guard_state": {
+        "edit_tool": "write_file",
+        "edit_args": {
+            "path": "/app/out.html",
+            "content": '<img src=x onerror=alert(1)><script>alert(1)</script>',
+        },
+        "edit_contains": ["on*_attributes", "script_tags"],
+        "probe_tool": "check_command_available",
+        "probe_cases": [
+            {"args": {"command_name": "pytest"}, "contains": ["verify_alert.py"]},
+            {"args": {"command_name": "google-chrome"}, "contains": ["verify_alert.py"]},
         ],
     }
 }

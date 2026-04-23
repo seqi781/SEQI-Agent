@@ -4,6 +4,8 @@ from pathlib import Path
 
 from src.terminal_agent.agent import LangGraphTerminalBenchAgent
 from tests.trace_replay_fixtures import (
+    TRACE_REPLAY_GUARD_EXPECTATIONS,
+    TRACE_REPLAY_PAYLOAD_EXPECTATIONS,
     TRACE_REPLAY_PAYLOAD_FIXTURES,
     TRACE_REPLAY_STATE_FIXTURES,
 )
@@ -394,44 +396,40 @@ if attr.startswith("on"):
         self.assertIsNotNone(reason)
         self.assertIn("already confirmed missing", reason or "")
 
-    def test_trace_replay_derives_negative_verification_without_false_success_or_browser_block(self) -> None:
-        _, _, state = self.replay_state_from_payload_fixture(
-            "negative_verification_without_false_success_or_browser_block"
-        )
+    def test_trace_replay_payload_fixtures_match_expected_state(self) -> None:
+        for fixture_name, expected in TRACE_REPLAY_PAYLOAD_EXPECTATIONS.items():
+            with self.subTest(fixture=fixture_name):
+                _, _, state = self.replay_state_from_payload_fixture(fixture_name)
+                self.assertEqual(state[0], expected["verification_state"])
+                self.assertEqual(state[1], expected["verification_summary"])
+                self.assertEqual(state[2], expected["blocked_verifiers"])
+                self.assertEqual(state[3], expected["verified_failures"])
+                self.assertEqual(state[4], expected["verified_successes"])
 
-        self.assertEqual(state[0], "negatively_verified")
-        self.assertEqual(state[1], "NO_ALERT TimeoutException")
-        self.assertEqual(state[2], ["pytest_missing"])
-        self.assertEqual(state[3], ["NO_ALERT TimeoutException"])
-        self.assertEqual(state[4], [])
+    def test_trace_replay_guard_fixtures_block_repeat_edits_and_redundant_probes(self) -> None:
+        for fixture_name, expected in TRACE_REPLAY_GUARD_EXPECTATIONS.items():
+            with self.subTest(fixture=fixture_name):
+                agent = self.make_agent()
+                state = TRACE_REPLAY_STATE_FIXTURES[fixture_name]
 
-    def test_trace_replay_followup_guards_block_repeat_edits_and_redundant_probes(self) -> None:
-        agent = self.make_agent()
-        state = TRACE_REPLAY_STATE_FIXTURES["followup_guard_state"]
+                edit_reason = agent._rejected_pattern_edit_reason(
+                    state,
+                    expected["edit_tool"],
+                    expected["edit_args"],
+                )
+                self.assertIsNotNone(edit_reason)
+                for token in expected["edit_contains"]:
+                    self.assertIn(token, edit_reason or "")
 
-        edit_reason = agent._rejected_pattern_edit_reason(
-            state,
-            "write_file",
-            {"path": "/app/out.html", "content": '<img src=x onerror=alert(1)><script>alert(1)</script>'},
-        )
-        pytest_probe_reason = agent._redundant_verifier_probe_reason(
-            state,
-            "check_command_available",
-            {"command_name": "pytest"},
-        )
-        browser_probe_reason = agent._redundant_verifier_probe_reason(
-            state,
-            "check_command_available",
-            {"command_name": "google-chrome"},
-        )
-
-        self.assertIsNotNone(edit_reason)
-        self.assertIn("on*_attributes", edit_reason or "")
-        self.assertIn("script_tags", edit_reason or "")
-        self.assertIsNotNone(pytest_probe_reason)
-        self.assertIn("verify_alert.py", pytest_probe_reason or "")
-        self.assertIsNotNone(browser_probe_reason)
-        self.assertIn("verify_alert.py", browser_probe_reason or "")
+                for probe_case in expected["probe_cases"]:
+                    probe_reason = agent._redundant_verifier_probe_reason(
+                        state,
+                        expected["probe_tool"],
+                        probe_case["args"],
+                    )
+                    self.assertIsNotNone(probe_reason)
+                    for token in probe_case["contains"]:
+                        self.assertIn(token, probe_reason or "")
 
     def test_chromium_dbus_noise_does_not_trigger_failure_guidance(self) -> None:
         from langchain_core.messages import ToolMessage
