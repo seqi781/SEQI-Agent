@@ -133,6 +133,14 @@ tests/trace_replay_fixtures.py
 - 重复 payload family guard
 - 冗余 verifier probe guard
 
+如果你已经有一份 LangSmith / Harbor trace JSON，可以先用脚本生成 fixture 草稿：
+
+```bash
+uv run python scripts/trace_to_fixture.py /path/to/trace.json --name my_trace_case
+```
+
+它会输出可直接粘贴到 `tests/trace_replay_fixtures.py` 的 payload/state/expectation 片段，再按需要补 guard expectation。
+
 ## 代码结构
 
 当前实现已经按职责拆分到包内：
