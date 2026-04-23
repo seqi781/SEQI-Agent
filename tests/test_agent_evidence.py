@@ -382,6 +382,87 @@ if attr.startswith("on"):
         self.assertIsNotNone(reason)
         self.assertIn("already confirmed missing", reason or "")
 
+    def test_trace_replay_derives_negative_verification_without_false_success_or_browser_block(self) -> None:
+        agent = self.make_agent()
+        evidence = []
+        for payload in [
+            {
+                "_tool_name": "check_command_available",
+                "return_code": 0,
+                "stdout": '{"command":"pytest","available":false}',
+                "stderr": "",
+            },
+            {
+                "_tool_name": "check_command_available",
+                "return_code": 0,
+                "stdout": '{"command":"google-chrome","available":false}',
+                "stderr": "",
+            },
+            {
+                "_tool_name": "check_command_available",
+                "return_code": 0,
+                "stdout": '{"command":"chromium","available":true,"path":"/usr/bin/chromium"}',
+                "stderr": "",
+            },
+            {
+                "_tool_name": "exec_shell",
+                "return_code": 0,
+                "stdout": "NO_ALERT TimeoutException\n",
+                "stderr": "",
+            },
+        ]:
+            evidence.extend(agent._extract_evidence_from_payload(payload))
+
+        state = agent._derive_state_from_evidence(evidence, [], [], [], [])
+
+        self.assertEqual(state[0], "negatively_verified")
+        self.assertEqual(state[1], "NO_ALERT TimeoutException")
+        self.assertEqual(state[2], ["pytest_missing"])
+        self.assertEqual(state[3], ["NO_ALERT TimeoutException"])
+        self.assertEqual(state[4], [])
+
+    def test_trace_replay_followup_guards_block_repeat_edits_and_redundant_probes(self) -> None:
+        agent = self.make_agent()
+        state = {
+            "helper_roles": {"/app/.agent-tools/verify_alert.py": "verifier"},
+            "blocked_verifiers": ["pytest_missing"],
+            "rejected_solution_patterns": ["on*_attributes", "script_tags", "banned_tags"],
+            "evidence_log": [
+                {
+                    "type": "environment",
+                    "claim": "chromium_present",
+                    "scope": "environment",
+                    "confidence": "high",
+                    "source": "check_command_available",
+                    "detail": '{"command":"chromium","available":true,"path":"/usr/bin/chromium"}',
+                }
+            ],
+        }
+
+        edit_reason = agent._rejected_pattern_edit_reason(
+            state,
+            "write_file",
+            {"path": "/app/out.html", "content": '<img src=x onerror=alert(1)><script>alert(1)</script>'},
+        )
+        pytest_probe_reason = agent._redundant_verifier_probe_reason(
+            state,
+            "check_command_available",
+            {"command_name": "pytest"},
+        )
+        browser_probe_reason = agent._redundant_verifier_probe_reason(
+            state,
+            "check_command_available",
+            {"command_name": "google-chrome"},
+        )
+
+        self.assertIsNotNone(edit_reason)
+        self.assertIn("on*_attributes", edit_reason or "")
+        self.assertIn("script_tags", edit_reason or "")
+        self.assertIsNotNone(pytest_probe_reason)
+        self.assertIn("verify_alert.py", pytest_probe_reason or "")
+        self.assertIsNotNone(browser_probe_reason)
+        self.assertIn("verify_alert.py", browser_probe_reason or "")
+
     def test_chromium_dbus_noise_does_not_trigger_failure_guidance(self) -> None:
         from langchain_core.messages import ToolMessage
 
