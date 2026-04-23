@@ -103,7 +103,7 @@ class LangGraphTerminalBenchAgent(BaseAgent):
         return "langgraph-terminal-agent"
 
     def version(self) -> str:
-        return "0.9.17"
+        return "0.9.18"
 
     def _emit(self, message: str) -> None:
         self._emitter.emit(message)
@@ -1159,6 +1159,49 @@ class LangGraphTerminalBenchAgent(BaseAgent):
                 paths.append(value.strip())
         return paths
 
+    def _edited_content_for_tool(self, tool_name: str, args: dict[str, Any]) -> str:
+        content_arg_keys = {
+            "write_file": ["content"],
+            "append_file": ["content"],
+            "replace_in_file": ["replacement", "new_content", "content"],
+            "apply_unified_diff": ["patch", "diff", "content"],
+        }
+        parts: list[str] = []
+        for key in content_arg_keys.get(tool_name, []):
+            value = args.get(key)
+            if isinstance(value, str) and value.strip():
+                parts.append(value)
+        return "\n".join(parts)
+
+    def _rejected_pattern_edit_reason(self, state: AgentState, tool_name: str, args: dict[str, Any]) -> str | None:
+        rejected_patterns = list(state.get("rejected_solution_patterns", []))
+        if not rejected_patterns:
+            return None
+        content = self._edited_content_for_tool(tool_name, args)
+        if not content.strip():
+            return None
+
+        lowered = content.lower()
+        violated: list[str] = []
+        if "on*_attributes" in rejected_patterns and re.search(r"\bon[a-z0-9_-]+\s*=", lowered):
+            violated.append("on*_attributes")
+        if "script_tags" in rejected_patterns and "<script" in lowered:
+            violated.append("script_tags")
+        if "banned_tags" in rejected_patterns and re.search(r"<\s*(frame|iframe|object|embed)\b", lowered):
+            violated.append("banned_tags")
+        if not violated:
+            return None
+
+        guidance = [
+            self.REJECTED_PATTERN_RULES[pattern]["guidance"]
+            for pattern in violated
+            if pattern in self.REJECTED_PATTERN_RULES
+        ]
+        return (
+            "Refusing to apply an edit that repeats already-rejected solution families: "
+            f"{', '.join(violated)}. {' '.join(guidance)}"
+        )
+
     def _reconnaissance_score(self, payloads: list[dict[str, Any]]) -> int:
         score = 0
         for payload in payloads:
@@ -2032,6 +2075,23 @@ class LangGraphTerminalBenchAgent(BaseAgent):
                         return_code=1,
                         stdout="",
                         stderr=invalid_verifier_reason,
+                    )
+                    self._emit_block("graph.tool_error", error_text)
+                    tool_messages.append(
+                        ToolMessage(
+                            content=error_text,
+                            tool_call_id=call["id"],
+                            name=name,
+                        )
+                    )
+                    continue
+                rejected_pattern_reason = self._rejected_pattern_edit_reason(state, name, args)
+                if rejected_pattern_reason:
+                    error_text = format_exec_result(
+                        command=f"{name}({json.dumps(args, ensure_ascii=False)})",
+                        return_code=1,
+                        stdout="",
+                        stderr=rejected_pattern_reason,
                     )
                     self._emit_block("graph.tool_error", error_text)
                     tool_messages.append(

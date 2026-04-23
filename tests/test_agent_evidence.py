@@ -295,6 +295,39 @@ if attr.startswith("on"):
         self.assertIn("Do not propose a solution family", prompt)
         self.assertIn("on*_attributes", prompt)
 
+    def test_rejected_pattern_edit_guard_blocks_repeat_payload_families(self) -> None:
+        agent = self.make_agent()
+        reason = agent._rejected_pattern_edit_reason(
+            {
+                "rejected_solution_patterns": ["on*_attributes", "script_tags", "banned_tags"],
+            },
+            "write_file",
+            {
+                "path": "/app/out.html",
+                "content": '<script>alert(1)</script><img src=x onerror=alert(1)><object data="x"></object>',
+            },
+        )
+
+        self.assertIsNotNone(reason)
+        self.assertIn("on*_attributes", reason or "")
+        self.assertIn("script_tags", reason or "")
+        self.assertIn("banned_tags", reason or "")
+
+    def test_rejected_pattern_edit_guard_ignores_clean_content(self) -> None:
+        agent = self.make_agent()
+        reason = agent._rejected_pattern_edit_reason(
+            {
+                "rejected_solution_patterns": ["on*_attributes", "script_tags", "banned_tags"],
+            },
+            "write_file",
+            {
+                "path": "/app/out.html",
+                "content": "<!doctype html><html><body><meta charset='utf-8'></body></html>",
+            },
+        )
+
+        self.assertIsNone(reason)
+
     def test_chromium_dbus_noise_does_not_trigger_failure_guidance(self) -> None:
         from langchain_core.messages import ToolMessage
 
