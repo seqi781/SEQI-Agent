@@ -714,6 +714,187 @@ class LangGraphTerminalBenchAgent(BaseAgent):
             seen.add(key)
         return merged
 
+    def _make_evidence(
+        self,
+        *,
+        source: str,
+        evidence_type: EvidenceItem["type"],
+        claim: str,
+        scope: EvidenceItem["scope"],
+        confidence: EvidenceItem["confidence"],
+        detail: str,
+    ) -> EvidenceItem:
+        return {
+            "type": evidence_type,
+            "claim": claim,
+            "scope": scope,
+            "confidence": confidence,
+            "source": source,
+            "detail": truncate_text(detail.strip(), 240),
+        }
+
+    def _extract_environment_evidence(
+        self,
+        *,
+        tool_name: str,
+        source: str,
+        command: str,
+        stdout: str,
+        combined: str,
+    ) -> list[EvidenceItem]:
+        if tool_name != "check_command_available":
+            return []
+        match = re.search(r'"command"\s*:\s*"([^"]+)"', stdout)
+        command_name = match.group(1) if match else ""
+        if '"available":true' in combined:
+            claim = f"{command_name or source}_present"
+        elif '"available":false' in combined:
+            claim = f"{command_name or source}_missing"
+        else:
+            return []
+        return [
+            self._make_evidence(
+                source=source,
+                evidence_type="environment",
+                claim=claim,
+                scope="environment",
+                confidence="high",
+                detail=stdout or command,
+            )
+        ]
+
+    def _extract_tool_category_evidence(
+        self,
+        *,
+        tool_name: str,
+        source: str,
+        command: str,
+        stdout: str,
+        return_code: int,
+    ) -> list[EvidenceItem]:
+        items: list[EvidenceItem] = []
+        if tool_name in {"read_file", "read_many_files", "list_files", "find_files", "file_info", "search_text"} and stdout:
+            items.append(
+                self._make_evidence(
+                    source=source,
+                    evidence_type="inspection",
+                    claim=f"{tool_name}_inspected",
+                    scope="artifact",
+                    confidence="high",
+                    detail=stdout,
+                )
+            )
+        if tool_name in {"write_file", "write_json", "append_file", "replace_in_file", "apply_unified_diff"} and return_code == 0:
+            items.append(
+                self._make_evidence(
+                    source=source,
+                    evidence_type="artifact_change",
+                    claim=f"{tool_name}_applied",
+                    scope="artifact",
+                    confidence="high",
+                    detail=command or stdout,
+                )
+            )
+        if tool_name in {"create_python_tool", "create_shell_tool", "create_helper_tool", "create_command_shim"} and return_code == 0:
+            items.append(
+                self._make_evidence(
+                    source=source,
+                    evidence_type="artifact_change",
+                    claim="helper_created",
+                    scope="environment",
+                    confidence="high",
+                    detail=stdout or command,
+                )
+            )
+        return items
+
+    def _extract_verification_evidence(
+        self,
+        *,
+        tool_name: str,
+        source: str,
+        command: str,
+        stdout: str,
+        stderr: str,
+        combined: str,
+        return_code: int,
+    ) -> list[EvidenceItem]:
+        if tool_name not in {"exec_shell", "run_tests", "run_program_with_input", "compare_output"}:
+            return []
+        detail = stdout or stderr
+        items: list[EvidenceItem] = []
+
+        def add(
+            evidence_type: EvidenceItem["type"],
+            claim: str,
+            scope: EvidenceItem["scope"],
+            confidence: EvidenceItem["confidence"] = "high",
+            item_detail: str | None = None,
+        ) -> None:
+            items.append(
+                self._make_evidence(
+                    source=source,
+                    evidence_type=evidence_type,
+                    claim=claim,
+                    scope=scope,
+                    confidence=confidence,
+                    detail=item_detail if item_detail is not None else detail,
+                )
+            )
+
+        marker_rules: list[tuple[str, EvidenceItem["type"], str, EvidenceItem["scope"]]] = [
+            ("verification_result=pass", "verification", "verification_passed", "solution"),
+            ("verification_result=fail", "verification", "verification_failed", "solution"),
+            ("verification_result=blocked", "failure", "verification_blocked", "verifier"),
+            ("alert_present=1", "verification", "alert_triggered", "solution"),
+            ("alert_present=true", "verification", "alert_triggered", "solution"),
+            ("alert_present=0", "verification", "alert_not_triggered", "solution"),
+            ("alert_present=false", "verification", "alert_not_triggered", "solution"),
+            ("no_alert", "verification", "alert_not_triggered", "solution"),
+            ("no module named pytest", "environment", "pytest_missing", "verifier"),
+            ("refusing to run an invalid verifier command", "failure", "invalid_verifier_command", "verifier"),
+        ]
+        for marker, evidence_type, claim, scope in marker_rules:
+            if marker in combined:
+                add(evidence_type, claim, scope)
+        if "alert " in combined or "alert_successfully_triggered" in combined or "alert successfully triggered" in combined:
+            add("verification", "alert_triggered", "solution")
+        if return_code != 0:
+            add("failure", f"{tool_name}_failed", "strategy", "medium", stderr or stdout or command)
+        return items
+
+    def _extract_domain_evidence(
+        self,
+        *,
+        tool_name: str,
+        source: str,
+        stdout: str,
+    ) -> list[EvidenceItem]:
+        if tool_name not in {"read_file", "exec_shell"}:
+            return []
+        items: list[EvidenceItem] = []
+
+        def add(claim: str, confidence: EvidenceItem["confidence"] = "high") -> None:
+            items.append(
+                self._make_evidence(
+                    source=source,
+                    evidence_type="inspection",
+                    claim=claim,
+                    scope="strategy",
+                    confidence=confidence,
+                    detail=stdout,
+                )
+            )
+
+        lowered_stdout = stdout.lower()
+        if "if attr.startswith(\"on\")" in stdout or "if attr.startswith(\\\"on\\\")" in stdout:
+            add("filter_strips_on_attributes")
+        if "script.decompose" in lowered_stdout:
+            add("filter_strips_script_tags")
+        if "frame" in lowered_stdout and "iframe" in lowered_stdout and "object" in lowered_stdout:
+            add("filter_strips_banned_tags", "medium")
+        return items
+
     def _extract_evidence_from_payload(self, payload: dict[str, Any]) -> list[EvidenceItem]:
         tool_name = str(payload.get("_tool_name", "")).lower()
         command = str(payload.get("command", "") or "").strip()
@@ -722,75 +903,36 @@ class LangGraphTerminalBenchAgent(BaseAgent):
         combined = f"{stdout}\n{stderr}".lower()
         return_code = int(payload.get("return_code", 0) or 0)
         source = tool_name or "tool"
-        items: list[EvidenceItem] = []
-
-        def add(
-            evidence_type: EvidenceItem["type"],
-            claim: str,
-            scope: EvidenceItem["scope"],
-            confidence: EvidenceItem["confidence"],
-            detail: str,
-        ) -> None:
-            items.append(
-                {
-                    "type": evidence_type,
-                    "claim": claim,
-                    "scope": scope,
-                    "confidence": confidence,
-                    "source": source,
-                    "detail": truncate_text(detail.strip(), 240),
-                }
-            )
-
-        if tool_name == "check_command_available":
-            match = re.search(r'"command"\s*:\s*"([^"]+)"', stdout)
-            command_name = match.group(1) if match else ""
-            if '"available":true' in combined:
-                add("environment", f"{command_name or source}_present", "environment", "high", stdout or command)
-            elif '"available":false' in combined:
-                add("environment", f"{command_name or source}_missing", "environment", "high", stdout or command)
-
-        if tool_name in {"read_file", "read_many_files", "list_files", "find_files", "file_info", "search_text"}:
-            if stdout:
-                add("inspection", f"{tool_name}_inspected", "artifact", "high", stdout)
-
-        if tool_name in {"write_file", "write_json", "append_file", "replace_in_file", "apply_unified_diff"} and return_code == 0:
-            add("artifact_change", f"{tool_name}_applied", "artifact", "high", command or stdout)
-
-        if tool_name in {"create_python_tool", "create_shell_tool", "create_helper_tool", "create_command_shim"} and return_code == 0:
-            add("artifact_change", "helper_created", "environment", "high", stdout or command)
-
-        if tool_name in {"exec_shell", "run_tests", "run_program_with_input", "compare_output"}:
-            if "verification_result=pass" in combined:
-                add("verification", "verification_passed", "solution", "high", stdout or stderr)
-            if "verification_result=fail" in combined:
-                add("verification", "verification_failed", "solution", "high", stdout or stderr)
-            if "verification_result=blocked" in combined:
-                add("failure", "verification_blocked", "verifier", "high", stdout or stderr)
-            if "alert_present=1" in combined or "alert_present=true" in combined:
-                add("verification", "alert_triggered", "solution", "high", stdout or stderr)
-            if "alert_present=0" in combined or "alert_present=false" in combined:
-                add("verification", "alert_not_triggered", "solution", "high", stdout or stderr)
-            if "no_alert" in combined:
-                add("verification", "alert_not_triggered", "solution", "high", stdout or stderr)
-            if "alert " in combined or "alert_successfully_triggered" in combined or "alert successfully triggered" in combined:
-                add("verification", "alert_triggered", "solution", "high", stdout or stderr)
-            if "no module named pytest" in combined:
-                add("environment", "pytest_missing", "verifier", "high", stdout or stderr)
-            if "refusing to run an invalid verifier command" in combined:
-                add("failure", "invalid_verifier_command", "verifier", "high", stderr or stdout)
-            if return_code != 0:
-                add("failure", f"{tool_name}_failed", "strategy", "medium", stderr or stdout or command)
-
-        if tool_name in {"read_file", "exec_shell"}:
-            if "if attr.startswith(\"on\")" in stdout or "if attr.startswith(\\\"on\\\")" in stdout:
-                add("inspection", "filter_strips_on_attributes", "strategy", "high", stdout)
-            if "script.decompose" in stdout.lower():
-                add("inspection", "filter_strips_script_tags", "strategy", "high", stdout)
-            if "frame" in stdout.lower() and "iframe" in stdout.lower() and "object" in stdout.lower():
-                add("inspection", "filter_strips_banned_tags", "strategy", "medium", stdout)
-
-        return items
+        return [
+            *self._extract_environment_evidence(
+                tool_name=tool_name,
+                source=source,
+                command=command,
+                stdout=stdout,
+                combined=combined,
+            ),
+            *self._extract_tool_category_evidence(
+                tool_name=tool_name,
+                source=source,
+                command=command,
+                stdout=stdout,
+                return_code=return_code,
+            ),
+            *self._extract_verification_evidence(
+                tool_name=tool_name,
+                source=source,
+                command=command,
+                stdout=stdout,
+                stderr=stderr,
+                combined=combined,
+                return_code=return_code,
+            ),
+            *self._extract_domain_evidence(
+                tool_name=tool_name,
+                source=source,
+                stdout=stdout,
+            ),
+        ]
 
     def _derive_state_from_evidence(
         self,

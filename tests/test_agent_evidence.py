@@ -83,6 +83,74 @@ class AgentEvidenceTests(unittest.TestCase):
         self.assertIn("Avoid `<script>` tags", joined)
         self.assertIn("Avoid frame/iframe/object/embed", joined)
 
+    def test_tool_category_evidence_tracks_inspection_edits_and_helpers(self) -> None:
+        agent = self.make_agent()
+
+        read_claims = {
+            item["claim"]
+            for item in agent._extract_evidence_from_payload(
+                {
+                    "_tool_name": "read_file",
+                    "return_code": 0,
+                    "stdout": "content",
+                    "stderr": "",
+                }
+            )
+        }
+        self.assertIn("read_file_inspected", read_claims)
+
+        write_claims = {
+            item["claim"]
+            for item in agent._extract_evidence_from_payload(
+                {
+                    "_tool_name": "write_file",
+                    "return_code": 0,
+                    "command": "write /app/out",
+                    "stdout": "",
+                    "stderr": "",
+                }
+            )
+        }
+        self.assertIn("write_file_applied", write_claims)
+
+        helper_claims = {
+            item["claim"]
+            for item in agent._extract_evidence_from_payload(
+                {
+                    "_tool_name": "create_python_tool",
+                    "return_code": 0,
+                    "stdout": "created /app/.agent-tools/check.py",
+                    "stderr": "",
+                }
+            )
+        }
+        self.assertIn("helper_created", helper_claims)
+
+    def test_domain_evidence_extracts_filter_rejected_patterns(self) -> None:
+        agent = self.make_agent()
+        source = '''
+for script in soup("script"):
+    script.decompose()
+for bad in ["frame", "iframe", "object", "embed"]:
+    pass
+if attr.startswith("on"):
+    del tag.attrs[attr]
+'''
+        evidence = agent._extract_evidence_from_payload(
+            {
+                "_tool_name": "read_file",
+                "return_code": 0,
+                "stdout": source,
+                "stderr": "",
+            }
+        )
+        state = agent._derive_state_from_evidence(evidence, [], [], [], [])
+
+        self.assertIn("filter_strips_on_attributes", {item["claim"] for item in evidence})
+        self.assertIn("filter_strips_script_tags", {item["claim"] for item in evidence})
+        self.assertIn("filter_strips_banned_tags", {item["claim"] for item in evidence})
+        self.assertEqual(set(state[5]), {"on*_attributes", "script_tags", "banned_tags"})
+
     def test_replanner_prompt_surfaces_evidence_derived_actions(self) -> None:
         agent = self.make_agent()
         prompt = agent._replan_prompt(
