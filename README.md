@@ -139,6 +139,20 @@ tests/trace_replay_fixtures.py
 uv run python scripts/trace_to_fixture.py /path/to/trace.json --name my_trace_case
 ```
 
+如果你希望直接把提取结果写进当前项目的 `tests/trace_replay_fixtures.py`，可以用：
+
+```bash
+uv run python scripts/trace_to_fixture.py /path/to/trace.json --name my_trace_case --append
+```
+
+`--append` 会：
+
+- 按当前工作目录定位项目根
+- 检查 fixture 名是否已存在
+- 把四组 map 一次性写回 fixture 文件
+
+如果同名 fixture 已存在，脚本会直接报错退出，不会覆盖。
+
 它会输出可直接粘贴到 `tests/trace_replay_fixtures.py` 的：
 
 - `TRACE_REPLAY_PAYLOAD_FIXTURES`
