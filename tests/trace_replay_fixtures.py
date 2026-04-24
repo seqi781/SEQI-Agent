@@ -29,8 +29,8 @@ TRACE_REPLAY_PAYLOAD_FIXTURES = {
             "return_code": 0,
             "stdout": "NO_ALERT TimeoutException\n",
             "stderr": "",
-        },
-    ],
+        }
+    ]
 }
 
 TRACE_REPLAY_PAYLOAD_EXPECTATIONS = {
@@ -57,7 +57,7 @@ TRACE_REPLAY_STATE_FIXTURES = {
                 "source": "check_command_available",
                 "detail": '{"command":"chromium","available":true,"path":"/usr/bin/chromium"}',
             }
-        ],
+        ]
     }
 }
 
@@ -71,8 +71,14 @@ TRACE_REPLAY_GUARD_EXPECTATIONS = {
         "edit_contains": ["on*_attributes", "script_tags"],
         "probe_tool": "check_command_available",
         "probe_cases": [
-            {"args": {"command_name": "pytest"}, "contains": ["verify_alert.py"]},
-            {"args": {"command_name": "google-chrome"}, "contains": ["verify_alert.py"]},
-        ],
+            {
+                "args": {"command_name": "pytest"},
+                "contains": ["verify_alert.py"],
+            },
+            {
+                "args": {"command_name": "google-chrome"},
+                "contains": ["verify_alert.py"],
+            }
+        ]
     }
 }

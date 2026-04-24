@@ -3,14 +3,19 @@ import unittest
 from pathlib import Path
 import subprocess
 import sys
+import json
 
 from src.terminal_agent.trace_replay import (
+    append_fixture_to_module,
+    build_fixture_bundle,
     extract_guard_expectation_stub,
     extract_payload_expectation,
     extract_state_fixture,
     extract_tool_payloads,
     fixture_name_from_trace,
+    load_fixture_maps,
     load_trace,
+    render_fixture_module,
     render_fixture_snippets,
 )
 
@@ -90,6 +95,35 @@ class TraceReplayTests(unittest.TestCase):
             loaded = load_trace(str(path))
         self.assertEqual(loaded["outputs"]["messages"], [])
 
+    def test_build_bundle_and_render_module(self) -> None:
+        trace = self.sample_trace()
+        name, bundle = build_fixture_bundle(trace, "bundle case")
+        self.assertEqual(name, "bundle_case")
+        self.assertIn("bundle_case", bundle["TRACE_REPLAY_PAYLOAD_FIXTURES"])
+        rendered = render_fixture_module(bundle)
+        self.assertIn("TRACE_REPLAY_PAYLOAD_FIXTURES =", rendered)
+        self.assertIn("TRACE_REPLAY_GUARD_EXPECTATIONS =", rendered)
+
+    def test_append_fixture_to_module(self) -> None:
+        initial = '''"""Trace replay fixtures for regression coverage."""
+
+TRACE_REPLAY_PAYLOAD_FIXTURES = {}
+
+TRACE_REPLAY_PAYLOAD_EXPECTATIONS = {}
+
+TRACE_REPLAY_STATE_FIXTURES = {}
+
+TRACE_REPLAY_GUARD_EXPECTATIONS = {}
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            fixture_path = Path(temp_dir) / "trace_replay_fixtures.py"
+            fixture_path.write_text(initial)
+            name = append_fixture_to_module(self.sample_trace(), str(fixture_path), "append case")
+            self.assertEqual(name, "append_case")
+            loaded = load_fixture_maps(str(fixture_path))
+        self.assertIn("append_case", loaded["TRACE_REPLAY_PAYLOAD_FIXTURES"])
+        self.assertIn("append_case", loaded["TRACE_REPLAY_GUARD_EXPECTATIONS"])
+
     def test_cli_renders_fixture_sections(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "trace.json"
@@ -106,6 +140,41 @@ class TraceReplayTests(unittest.TestCase):
         self.assertIn("# Fixture name: cli_case", result.stdout)
         self.assertIn("TRACE_REPLAY_PAYLOAD_FIXTURES update:", result.stdout)
         self.assertIn("TRACE_REPLAY_GUARD_EXPECTATIONS update:", result.stdout)
+
+    def test_cli_append_writes_fixture_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project_root = Path(temp_dir)
+            tests_dir = project_root / "tests"
+            tests_dir.mkdir()
+            (tests_dir / "trace_replay_fixtures.py").write_text(
+                '''"""Trace replay fixtures for regression coverage."""
+
+TRACE_REPLAY_PAYLOAD_FIXTURES = {}
+
+TRACE_REPLAY_PAYLOAD_EXPECTATIONS = {}
+
+TRACE_REPLAY_STATE_FIXTURES = {}
+
+TRACE_REPLAY_GUARD_EXPECTATIONS = {}
+'''
+            )
+            path = project_root / "trace.json"
+            path.write_text(json.dumps(self.sample_trace()))
+            script = project_root / "trace_to_fixture.py"
+            script.write_text((Path(__file__).resolve().parents[1] / "scripts" / "trace_to_fixture.py").read_text())
+            env = dict(__import__('os').environ)
+            env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1])
+            result = subprocess.run(
+                [sys.executable, str(script), str(path), "--name", "append cli", "--append"],
+                capture_output=True,
+                text=True,
+                cwd=project_root,
+                env=env,
+                check=True,
+            )
+            content = (tests_dir / "trace_replay_fixtures.py").read_text()
+        self.assertIn("Appended fixture 'append_cli'", result.stdout)
+        self.assertIn("append_cli", content)
 
 
 if __name__ == "__main__":

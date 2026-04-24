@@ -3,6 +3,13 @@ import re
 from pathlib import Path
 from typing import Any
 
+FIXTURE_MAP_NAMES = [
+    "TRACE_REPLAY_PAYLOAD_FIXTURES",
+    "TRACE_REPLAY_PAYLOAD_EXPECTATIONS",
+    "TRACE_REPLAY_STATE_FIXTURES",
+    "TRACE_REPLAY_GUARD_EXPECTATIONS",
+]
+
 
 def sanitize_fixture_name(raw: str) -> str:
     lowered = raw.strip().lower()
@@ -118,6 +125,51 @@ def render_fixture_snippets(trace: dict[str, Any], fixture_name: str | None = No
         json.dumps({name: guard_expectation}, ensure_ascii=False, indent=4),
     ]
     return "\n".join(lines)
+
+
+def build_fixture_bundle(trace: dict[str, Any], fixture_name: str | None = None) -> tuple[str, dict[str, dict[str, Any]]]:
+    name = fixture_name_from_trace(trace, fixture_name)
+    return name, {
+        "TRACE_REPLAY_PAYLOAD_FIXTURES": {name: extract_tool_payloads(trace)},
+        "TRACE_REPLAY_PAYLOAD_EXPECTATIONS": {name: extract_payload_expectation(trace)},
+        "TRACE_REPLAY_STATE_FIXTURES": {name: extract_state_fixture(trace)},
+        "TRACE_REPLAY_GUARD_EXPECTATIONS": {name: extract_guard_expectation_stub(trace)},
+    }
+
+
+def load_fixture_maps(path: str) -> dict[str, dict[str, Any]]:
+    namespace: dict[str, Any] = {}
+    exec(Path(path).read_text(), namespace)
+    return {
+        name: dict(namespace.get(name, {}))
+        for name in FIXTURE_MAP_NAMES
+    }
+
+
+def render_fixture_module(maps: dict[str, dict[str, Any]]) -> str:
+    lines = [
+        '"""Trace replay fixtures for regression coverage.',
+        "",
+        "Add new real-world traces here instead of duplicating test logic in",
+        '`tests/test_agent_evidence.py`.',
+        '"""',
+        "",
+    ]
+    for name in FIXTURE_MAP_NAMES:
+        lines.append(f"{name} = {json.dumps(maps.get(name, {}), ensure_ascii=False, indent=4)}")
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def append_fixture_to_module(trace: dict[str, Any], fixture_path: str, fixture_name: str | None = None) -> str:
+    name, bundle = build_fixture_bundle(trace, fixture_name)
+    maps = load_fixture_maps(fixture_path)
+    for map_name, map_update in bundle.items():
+        if name in maps.get(map_name, {}):
+            raise ValueError(f"Fixture '{name}' already exists in {map_name}.")
+        maps.setdefault(map_name, {}).update(map_update)
+    Path(fixture_path).write_text(render_fixture_module(maps))
+    return name
 
 
 def load_trace(path: str) -> dict[str, Any]:

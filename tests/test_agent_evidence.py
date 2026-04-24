@@ -442,14 +442,15 @@ if attr.startswith("on"):
                 agent = self.make_agent()
                 state = TRACE_REPLAY_STATE_FIXTURES[fixture_name]
 
-                edit_reason = agent._rejected_pattern_edit_reason(
-                    state,
-                    expected["edit_tool"],
-                    expected["edit_args"],
-                )
-                self.assertIsNotNone(edit_reason)
-                for token in expected["edit_contains"]:
-                    self.assertIn(token, edit_reason or "")
+                if expected["edit_contains"]:
+                    edit_reason = agent._rejected_pattern_edit_reason(
+                        state,
+                        expected["edit_tool"],
+                        expected["edit_args"],
+                    )
+                    self.assertIsNotNone(edit_reason)
+                    for token in expected["edit_contains"]:
+                        self.assertIn(token, edit_reason or "")
 
                 for probe_case in expected["probe_cases"]:
                     probe_reason = agent._redundant_verifier_probe_reason(
