@@ -139,7 +139,19 @@ tests/trace_replay_fixtures.py
 uv run python scripts/trace_to_fixture.py /path/to/trace.json --name my_trace_case
 ```
 
-它会输出可直接粘贴到 `tests/trace_replay_fixtures.py` 的 payload/state/expectation 片段，再按需要补 guard expectation。
+它会输出可直接粘贴到 `tests/trace_replay_fixtures.py` 的：
+
+- `TRACE_REPLAY_PAYLOAD_FIXTURES`
+- `TRACE_REPLAY_PAYLOAD_EXPECTATIONS`
+- `TRACE_REPLAY_STATE_FIXTURES`
+- `TRACE_REPLAY_GUARD_EXPECTATIONS`
+
+其中 guard expectation 默认只生成草稿：
+
+- `edit_contains` 会按 `rejected_solution_patterns` 预填
+- `probe_cases` 会按 `blocked_verifiers` 和已有 verifier helper 预填
+
+这样以后你贴一份 trace，不需要手工从长 JSON 里一点点摘 payload 和 state 了，只需要补具体 guard 断言内容。
 
 ## 代码结构
 
