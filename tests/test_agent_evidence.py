@@ -289,6 +289,19 @@ if attr.startswith("on"):
         self.assertIn("filter_strips_banned_tags", {item["claim"] for item in evidence})
         self.assertEqual(set(state[5]), {"on*_attributes", "script_tags", "banned_tags"})
 
+    def test_exec_shell_comments_do_not_fake_banned_tag_evidence(self) -> None:
+        agent = self.make_agent()
+        evidence = agent._extract_evidence_from_payload(
+            {
+                "_tool_name": "exec_shell",
+                "return_code": 0,
+                "stdout": "<!-- No script tags, no on* attributes, no frame/iframe/object/embed -->",
+                "stderr": "",
+            }
+        )
+
+        self.assertNotIn("filter_strips_banned_tags", {item["claim"] for item in evidence})
+
     def test_rejected_pattern_rules_drive_state_guidance_and_actions(self) -> None:
         agent = self.make_agent()
         for pattern, rule in agent.REJECTED_PATTERN_RULES.items():
@@ -372,6 +385,25 @@ if attr.startswith("on"):
 
         self.assertIsNone(reason)
 
+    def test_protected_shell_edit_guard_blocks_writes_under_tests(self) -> None:
+        agent = self.make_agent()
+        reason = agent._protected_shell_edit_reason(
+            "exec_shell",
+            {"command": "mkdir -p /tests && cp -f /app/filter.py /tests/filter.py"},
+        )
+
+        self.assertIsNotNone(reason)
+        self.assertIn("/tests", reason or "")
+
+    def test_protected_shell_edit_guard_allows_read_only_shell_access(self) -> None:
+        agent = self.make_agent()
+        reason = agent._protected_shell_edit_reason(
+            "exec_shell",
+            {"command": "ls -l /tests/filter.py || true"},
+        )
+
+        self.assertIsNone(reason)
+
     def test_redundant_verifier_probe_guard_prefers_existing_helper(self) -> None:
         agent = self.make_agent()
         reason = agent._redundant_verifier_probe_reason(
@@ -425,6 +457,67 @@ if attr.startswith("on"):
 
         self.assertIsNotNone(reason)
         self.assertIn("already confirmed missing", reason or "")
+
+    def test_pytest_helpers_are_classified_as_verifiers(self) -> None:
+        agent = self.make_agent()
+        roles = agent._helper_roles_from_paths(
+            ["pytest_shim.py", "/app/.agent-tools/pytest"],
+            {},
+        )
+
+        self.assertEqual(roles["pytest_shim.py"], "verifier")
+        self.assertEqual(roles["/app/.agent-tools/pytest"], "verifier")
+
+    def test_pytest_shim_failure_is_negative_verification_and_not_blocked(self) -> None:
+        agent = self.make_agent()
+        evidence = agent._extract_evidence_from_payload(
+            {
+                "_tool_name": "exec_shell",
+                "return_code": 1,
+                "stdout": (
+                    "FAIL: test_out_html_bypasses_filter: No alert detected after filtering. "
+                    "The XSS bypass failed. The filter successfully removed the JavaScript. "
+                    "The HTML needs to be crafted to bypass the filter.\n"
+                    "pytest shim: 1 failed\n"
+                ),
+                "stderr": "",
+            }
+        )
+        state = agent._derive_state_from_evidence(
+            evidence,
+            [],
+            [],
+            [],
+            [],
+            {"/app/.agent-tools/pytest": "verifier"},
+        )
+
+        self.assertIn("verification_failed", {item["claim"] for item in evidence})
+        self.assertEqual(state[0], "negatively_verified")
+        self.assertEqual(state[2], [])
+        self.assertTrue(state[3])
+
+    def test_pytest_missing_blocker_is_suppressed_when_verifier_helper_exists(self) -> None:
+        agent = self.make_agent()
+        evidence = agent._extract_evidence_from_payload(
+            {
+                "_tool_name": "check_command_available",
+                "return_code": 0,
+                "stdout": '{"command":"pytest","available":false}',
+                "stderr": "",
+            }
+        )
+        state = agent._derive_state_from_evidence(
+            evidence,
+            [],
+            [],
+            [],
+            [],
+            {"/app/.agent-tools/pytest": "verifier"},
+        )
+
+        self.assertEqual(state[0], "unverified")
+        self.assertEqual(state[2], [])
 
     def test_trace_replay_payload_fixtures_match_expected_state(self) -> None:
         for fixture_name, expected in TRACE_REPLAY_PAYLOAD_EXPECTATIONS.items():

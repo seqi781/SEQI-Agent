@@ -908,6 +908,18 @@ class LangGraphTerminalBenchAgent(BaseAgent):
             add("failure", "verification_blocked", "verifier")
         elif "verification_result=fail" in combined:
             add("verification", "verification_failed", "solution")
+        pytest_failure_markers = [
+            "fail: test_",
+            "pytest shim:",
+            "no alert detected after filtering",
+        ]
+        if (
+            "verification_result=fail" not in combined
+            and "no_alert" not in combined
+            and any(marker in combined for marker in pytest_failure_markers)
+            and "verification_result=pass" not in combined
+        ):
+            add("verification", "verification_failed", "solution")
         positive_alert_markers = [
             "alert_successfully_triggered",
             "alert successfully triggered",
@@ -928,7 +940,7 @@ class LangGraphTerminalBenchAgent(BaseAgent):
         source: str,
         stdout: str,
     ) -> list[EvidenceItem]:
-        if tool_name not in {"read_file", "exec_shell"}:
+        if tool_name != "read_file":
             return []
         items: list[EvidenceItem] = []
 
@@ -949,7 +961,12 @@ class LangGraphTerminalBenchAgent(BaseAgent):
             add("filter_strips_on_attributes")
         if "script.decompose" in lowered_stdout:
             add("filter_strips_script_tags")
-        if "frame" in lowered_stdout and "iframe" in lowered_stdout and "object" in lowered_stdout:
+        banned_tag_markers = [
+            '["frame", "iframe", "object", "embed"]',
+            "for bad in [\"frame\", \"iframe\", \"object\", \"embed\"]",
+            "for bad in ['frame', 'iframe', 'object', 'embed']",
+        ]
+        if any(marker in stdout for marker in banned_tag_markers):
             add("filter_strips_banned_tags", "medium")
         return items
 
@@ -999,6 +1016,7 @@ class LangGraphTerminalBenchAgent(BaseAgent):
         existing_failures: list[str],
         existing_successes: list[str],
         existing_rejected: list[str],
+        helper_roles: dict[str, str] | None = None,
     ) -> tuple[str, str, list[str], list[str], list[str], list[str]]:
         blocked = list(existing_blocked)
         failures = list(existing_failures)
@@ -1053,6 +1071,7 @@ class LangGraphTerminalBenchAgent(BaseAgent):
             {"chromium_present", "google-chrome_present", "chrome_present", "firefox_present"}
             & present_capabilities
         )
+        verifier_helper_available = any(role == "verifier" for role in (helper_roles or {}).values())
         for blocker in raw_blockers:
             if browser_available and blocker in {
                 "google-chrome_missing",
@@ -1060,6 +1079,8 @@ class LangGraphTerminalBenchAgent(BaseAgent):
                 "chromium_missing",
                 "firefox_missing",
             }:
+                continue
+            if verifier_helper_available and blocker == "pytest_missing":
                 continue
             blocked = self._merge_unique_strings(blocked, [blocker])
 
@@ -1200,6 +1221,29 @@ class LangGraphTerminalBenchAgent(BaseAgent):
         return (
             "Refusing to apply an edit that repeats already-rejected solution families: "
             f"{', '.join(violated)}. {' '.join(guidance)}"
+        )
+
+    def _protected_shell_edit_reason(self, tool_name: str, args: dict[str, Any]) -> str | None:
+        if tool_name not in {"exec_shell", "run_program_with_input"}:
+            return None
+        command = str(args.get("command", "") or "").strip()
+        if not command:
+            return None
+        lowered = command.lower()
+        protected_shell_patterns = [
+            r">\s*/tests(?:/|\b)",
+            r">>\s*/tests(?:/|\b)",
+            r"\b(?:cp|mv|install|touch|rm|mkdir)\b[^\n;|&]*\s/tests(?:/|\b)",
+            r"\btee\b[^\n;|&]*\s/tests(?:/|\b)",
+            r"\bsed\b[^\n;|&]*-i[^\n;|&]*\s/tests(?:/|\b)",
+            r"open\(\s*['\"](/tests(?:/[^'\"]*)?)['\"]\s*,\s*['\"][wa+]",
+            r"/tests(?:/[^\"'\s)]*)?['\"]?\)\.write_(?:text|bytes)\(",
+        ]
+        if not any(re.search(pattern, lowered) for pattern in protected_shell_patterns):
+            return None
+        return (
+            "Refusing to modify protected benchmark harness paths via shell execution. "
+            "Do not create, copy, move, or rewrite anything under `/tests`; solve the task artifact instead."
         )
 
     def _reconnaissance_score(self, payloads: list[dict[str, Any]]) -> int:
@@ -1472,7 +1516,7 @@ class LangGraphTerminalBenchAgent(BaseAgent):
                 continue
             name = Path(path).name.lower()
             role = roles.get(path, "")
-            if "selenium" in name or "verify" in name or "check" in name:
+            if "pytest" in name or "selenium" in name or "verify" in name or "check" in name:
                 role = role or "verifier"
             elif "probe" in name or "inspect" in name or "scan" in name:
                 role = role or "inspector"
@@ -2165,6 +2209,23 @@ class LangGraphTerminalBenchAgent(BaseAgent):
                         )
                     )
                     continue
+                protected_shell_reason = self._protected_shell_edit_reason(name, args)
+                if protected_shell_reason:
+                    error_text = format_exec_result(
+                        command=f"{name}({json.dumps(args, ensure_ascii=False)})",
+                        return_code=1,
+                        stdout="",
+                        stderr=protected_shell_reason,
+                    )
+                    self._emit_block("graph.tool_error", error_text)
+                    tool_messages.append(
+                        ToolMessage(
+                            content=error_text,
+                            tool_call_id=call["id"],
+                            name=name,
+                        )
+                    )
+                    continue
                 edited_paths = self._edited_paths_for_tool(name, args)
                 protected_targets = [
                     path for path in edited_paths if self._is_protected_benchmark_path(path)
@@ -2248,6 +2309,7 @@ class LangGraphTerminalBenchAgent(BaseAgent):
                         verified_failures,
                         verified_successes,
                         rejected_solution_patterns,
+                        helper_roles,
                     )
                     nonlocal_verification_state[0] = verification_state
                     nonlocal_verification_summary[0] = verification_summary
